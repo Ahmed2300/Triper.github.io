@@ -1,0 +1,85 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        ".indexOn": ["email", "userType"],
+        
+        "profile": {
+          ".read": "auth != null",
+          ".write": "auth != null && auth.uid === $uid"
+        },
+        
+        "trips": {
+          ".read": "auth != null && auth.uid === $uid",
+          ".write": "auth != null && auth.uid === $uid",
+          ".indexOn": ["timestamp", "status"]
+        }
+      }
+    },
+    
+    "TriptakerUsers": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        ".indexOn": ["email", "userType"],
+        
+        "profile": {
+          ".read": "auth != null",
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      }
+    },
+    
+    "rideRequests": {
+      ".indexOn": ["customerId", "driverId", "status", "timestamp"],
+      ".read": true,
+      ".write": true,
+      
+      "$requestId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        
+        "status": {
+          ".validate": "newData.val() === 'pending' || newData.val() === 'accepted' || newData.val() === 'completed' || newData.val() === 'cancelled'"
+        }
+      }
+    },
+    
+    "driverLocations": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["userId", "status", "lastUpdated"]
+    },
+    
+    "notifications": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null",
+        ".indexOn": ["timestamp", "read"]
+      }
+    },
+    
+    "ratings": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["userId", "tripId"]
+    },
+    
+    "connectionTest": {
+      ".read": true,
+      ".write": true
+    },
+    
+    ".public_access": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}
