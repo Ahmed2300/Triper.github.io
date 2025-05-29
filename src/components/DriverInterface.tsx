@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, MapPin, Play, Square, Navigation, Clock, Phone, AlertCircle, History, CheckCircle } from "lucide-react";
+import { ArrowLeft, MapPin, Play, Square, Navigation, Clock, Phone, AlertCircle, History, CheckCircle, Map } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import LiveRouteMap from "./LiveRouteMap";
 import { 
   listenToPendingRides, 
   updateRideRequest, 
@@ -38,7 +39,11 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [rideHistory, setRideHistory] = useState<RideRequest[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showMap, setShowMap] = useState(true); // Control for map visibility
   const { toast } = useToast();
+  
+  // Reference for tracking the location update interval
+  const locationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Get authenticated user from Firebase Auth
   const [driverId, setDriverId] = useState<string>("");
@@ -66,69 +71,66 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
     }
   }, []);
 
+  // Enhanced location tracking that updates every 5 seconds
   useEffect(() => {
-    // Get current location
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setCurrentLocation({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          });
-        },
-        () => {
-          toast({
-            title: "Location Error",
-            description: "Could not get your current location. Please enable location services.",
-            variant: "destructive",
-          });
-        }
-      );
-    }
-    
-    // Start watching position
-    let watchId: number;
-    if (navigator.geolocation) {
-      watchId = navigator.geolocation.watchPosition(
-        (position) => {
-          const newLocation = {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          };
-          
-          setCurrentLocation(newLocation);
-          
-          // If we're actively tracking a ride, update the mileage
-          if (isTracking && startLocation) {
-            const distance = calculateDistance(
-              startLocation.latitude,
-              startLocation.longitude,
-              newLocation.latitude,
-              newLocation.longitude
-            );
+    // Function to get current location
+    const updateDriverLocation = () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const newLocation = {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude
+            };
+            console.log("Driver location updated:", newLocation);
+            setCurrentLocation(newLocation);
             
-            setMileage(prevMileage => prevMileage + distance);
-            
-            // If we have an active ride, update its calculated mileage
-            if (activeRide) {
-              updateRideRequest(activeRide.id as string, {
-                calculatedMileage: mileage + distance,
-                currentDriverLocation: newLocation
-              });
+            // If we're actively tracking a ride, update the mileage
+            if (isTracking && startLocation) {
+              const distance = calculateDistance(
+                startLocation.latitude,
+                startLocation.longitude,
+                newLocation.latitude,
+                newLocation.longitude
+              );
+              
+              setMileage(prevMileage => prevMileage + distance);
+              
+              // If we have an active ride, update its calculated mileage
+              if (activeRide && activeRide.id) {
+                updateRideRequest(activeRide.id, {
+                  calculatedMileage: mileage + distance,
+                  currentDriverLocation: newLocation
+                }).catch(error => {
+                  console.error("Error updating ride mileage:", error);
+                });
+              }
             }
-          }
-        },
-        (error) => {
-          console.error('Error watching position:', error);
-        },
-        { enableHighAccuracy: true }
-      );
-    }
-    
-    return () => {
-      if (watchId) {
-        navigator.geolocation.clearWatch(watchId);
+          },
+          (error) => {
+            console.error('Error getting position:', error);
+            toast({
+              title: "Location Error",
+              description: "Unable to update your location. Some features may not work correctly.",
+              variant: "destructive",
+            });
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
       }
+    };
+    
+    // Get location immediately
+    updateDriverLocation();
+    
+    // Set up interval to update location every 5 seconds
+    const intervalId = setInterval(() => {
+      updateDriverLocation();
+    }, 5000);
+    
+    // Clean up on component unmount
+    return () => {
+      clearInterval(intervalId);
     };
   }, [isTracking, startLocation, mileage, activeRide, toast]);
   
@@ -198,10 +200,14 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
     }
     
     const unsubscribe = listenToPendingRides((rides) => {
+      // Filter out rides created by the current user (driver)
+      // This prevents users from seeing their own ride requests when they switch roles
+      const filteredRides = rides.filter(ride => ride.customerId !== driverId);
+      
       // If driver's location is available, sort rides by proximity
       if (currentLocation) {
         // Create a copy with distance calculated for each ride
-        const ridesWithDistance = rides.map(ride => {
+        const ridesWithDistance = filteredRides.map(ride => {
           const distance = ride.pickupLocation ? 
             calculateDistance(
               currentLocation.latitude,
@@ -222,12 +228,12 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
         setPendingRides(ridesWithDistance.map(({ _distance, ...ride }) => ride));
       } else {
         // If no location yet, just use the unsorted list
-        setPendingRides(rides);
+        setPendingRides(filteredRides);
       }
     });
     
     return unsubscribe;
-  }, [activeRide, currentLocation]);
+  }, [activeRide, currentLocation, driverId]);
 
   // Check for existing phone number in local storage or Firebase on component mount
   useEffect(() => {
@@ -479,53 +485,83 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
 
   return (
     <div className="container p-0 md:p-4 max-w-3xl mx-auto">
-      <div className="bg-white p-4 flex items-center mb-4">
-        <Button variant="ghost" onClick={onBack} className="p-2 mr-2">
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <h1 className="text-xl font-bold">Driver View</h1>
+      <div className="bg-gradient-to-r from-blue-600 to-blue-800 p-4 rounded-lg shadow-md flex items-center justify-between mb-4 text-white">
+        <div className="flex items-center">
+          <Button variant="ghost" onClick={onBack} className="p-2 mr-2 text-white hover:bg-blue-700/50 rounded-full">
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-xl font-bold">Driver Dashboard</h1>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {hasPhoneNumber && (
+            <Badge variant="outline" className="bg-blue-700/30 text-white border-blue-400 px-3 py-1">
+              {driverName}
+            </Badge>
+          )}
+          
+          <Button variant="ghost" className="rounded-full p-2 bg-blue-700/30 hover:bg-blue-700/50">
+            <span className="sr-only">Profile</span>
+            <div className="h-6 w-6 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-sm font-medium">
+              {driverName ? driverName.charAt(0).toUpperCase() : 'D'}
+            </div>
+          </Button>
+        </div>
       </div>
       
       <div className="space-y-6">
         {/* Driver Info Alert - Show if no phone number */}
         {!hasPhoneNumber && (
-          <Alert variant="destructive" className="mb-4">
+          <Alert variant="destructive" className="mb-4 rounded-lg border-red-300 shadow-sm">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              You need to add a phone number before accepting rides.{" "}
+            <AlertDescription className="flex items-center justify-between">
+              <span>You need to add a phone number before accepting rides.</span>
               <Button 
-                variant="link" 
-                className="p-0 h-auto text-red-800 underline"
+                variant="outline" 
+                size="sm"
+                className="bg-white border-red-300 text-red-600 hover:bg-red-50 ml-2"
                 onClick={() => setShowPhoneModal(true)}
               >
-                Add Phone Number
+                <Phone className="h-3 w-3 mr-1" />
+                Add Phone
               </Button>
             </AlertDescription>
           </Alert>
         )}
       
         {isLoading ? (
-          <Card className="p-8">
+          <Card className="p-8 rounded-xl shadow-lg border-0">
             <div className="flex flex-col items-center justify-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
-              <p className="text-muted-foreground">Loading ride information...</p>
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mb-4"></div>
+              <p className="text-muted-foreground font-medium">Loading ride information...</p>
             </div>
           </Card>
         ) : (
           <div>
             {/* Active Ride Card */}
             {activeRide && (
-              <Card className="mb-6">
-                <CardHeader>
+              <Card className="mb-6 rounded-xl shadow-lg border-0 overflow-hidden">
+                <CardHeader className="bg-gradient-to-r from-blue-50 to-blue-100 border-b">
                   <div className="flex justify-between items-center">
-                    <CardTitle>Active Ride</CardTitle>
+                    <CardTitle className="flex items-center">
+                      <Navigation className="h-5 w-5 mr-2 text-blue-600" />
+                      Active Ride
+                    </CardTitle>
                     <Badge 
                       variant={
                         activeRide.status === 'accepted' ? "outline" : 
                         activeRide.status === 'started' ? "default" : 
                         "secondary"
                       }
+                      className={
+                        activeRide.status === 'accepted' ? "bg-yellow-100 text-yellow-800 border-yellow-300" :
+                        activeRide.status === 'started' ? "bg-green-100 text-green-800 border-green-300" :
+                        "bg-blue-100 text-blue-800 border-blue-300"
+                      }
                     >
+                      {activeRide.status === 'accepted' && <Clock className="h-3 w-3 mr-1" />}
+                      {activeRide.status === 'started' && <Play className="h-3 w-3 mr-1" />}
+                      {activeRide.status === 'completed' && <CheckCircle className="h-3 w-3 mr-1" />}
                       {activeRide.status.charAt(0).toUpperCase() + activeRide.status.slice(1)}
                     </Badge>
                   </div>
@@ -571,8 +607,33 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                     
                     <Separator />
                     
+                    {/* Live Route Map */}
+                    {activeRide && currentLocation && showMap && (
+                      <div className="mt-4 mb-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <h3 className="text-sm font-medium flex items-center gap-2">
+                            <Map className="h-4 w-4 text-blue-600" />
+                            Live Route
+                          </h3>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={() => setShowMap(!showMap)}
+                            className="text-xs h-6 px-2"
+                          >
+                            {showMap ? 'Hide Map' : 'Show Map'}
+                          </Button>
+                        </div>
+                        <LiveRouteMap 
+                          ride={activeRide} 
+                          driverLocation={currentLocation} 
+                          className="rounded-lg overflow-hidden h-64 border border-gray-200"
+                        />
+                      </div>
+                    )}
+                    
                     {/* Ride Details */}
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-4 mt-4">
                       <div>
                         <p className="text-sm text-gray-500">Price</p>
                         <p className="font-medium">{formatPrice(activeRide.estimatedPrice || 0)}</p>
@@ -604,9 +665,10 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                     <div className="flex justify-end space-x-2 mt-2">
                       {activeRide.status === 'accepted' && (
                         <div className="flex flex-col w-full">
-                          <Button 
+                           <Button 
                             onClick={startRide}
                             variant="default"
+                            className="bg-green-600 hover:bg-green-700 text-white font-medium"
                           >
                             <Play className="mr-2 h-4 w-4" />
                             Start Trip
@@ -629,6 +691,7 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                         <Button 
                           onClick={completeRide}
                           variant="default"
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-medium"
                         >
                           <CheckCircle className="mr-2 h-4 w-4" />
                           Complete Trip
@@ -639,7 +702,9 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                         <Button 
                           onClick={resetRide}
                           variant="outline"
+                          className="border-blue-300 text-blue-700 hover:bg-blue-50"
                         >
+                          <ArrowLeft className="mr-2 h-4 w-4" />
                           Back to Ride List
                         </Button>
                       )}
@@ -652,21 +717,26 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
             {/* Pending Rides Section - only show if no active ride or active ride is completed */}
             {(!activeRide || activeRide.status === 'completed') && (
               <div className="space-y-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Available Ride Requests</CardTitle>
+                <Card className="rounded-xl shadow-lg border-0 overflow-hidden">
+                  <CardHeader className="bg-gradient-to-r from-blue-50 to-blue-100 border-b">
+                    <CardTitle className="flex items-center">
+                      <MapPin className="h-5 w-5 mr-2 text-blue-600" />
+                      Available Ride Requests
+                    </CardTitle>
                   </CardHeader>
                   <CardContent>
                     {pendingRides.length === 0 ? (
-                      <div className="text-center py-8 text-gray-500">
-                        <Clock className="mx-auto h-8 w-8 mb-2 text-gray-400" />
-                        <p>No ride requests available at the moment</p>
-                        <p className="text-sm mt-1">When customers request rides, they will appear here</p>
+                      <div className="text-center py-12 px-4 text-gray-500 bg-gray-50 rounded-lg my-4">
+                        <div className="bg-white p-6 rounded-full inline-flex items-center justify-center shadow-sm mb-4">
+                          <Clock className="h-10 w-10 text-blue-400" />
+                        </div>
+                        <p className="font-medium text-lg text-gray-700">No ride requests available</p>
+                        <p className="text-sm mt-2 max-w-md mx-auto">When customers request rides, they will appear here. You'll be notified when new ride requests come in.</p>
                       </div>
                     ) : (
                       <div className="space-y-4">
                         {pendingRides.map((ride) => (
-                          <Card key={ride.id} className="shadow-sm">
+                          <Card key={ride.id} className="shadow-md rounded-lg border-0 hover:shadow-lg transition-shadow duration-200">
                             <CardContent className="p-4">
                               <div className="flex flex-col space-y-3">
                                 <div className="flex justify-between items-start">
@@ -715,7 +785,9 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                                     size="sm"
                                     onClick={() => acceptRide(ride)}
                                     disabled={!hasPhoneNumber}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white"
                                   >
+                                    <CheckCircle className="h-3 w-3 mr-1" />
                                     Accept Ride
                                   </Button>
                                 </div>
@@ -731,51 +803,58 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                 {/* Ride History Section */}
                 {rideHistory.length > 0 && (
                   <div className="mt-6">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-lg font-medium flex items-center gap-2">
-                        <History className="h-5 w-5" />
-                        Ride History
-                      </h3>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        onClick={() => setShowHistory(!showHistory)}
-                      >
-                        {showHistory ? 'Hide' : 'Show'}
-                      </Button>
-                    </div>
+                    <Card className="rounded-xl shadow-lg border-0 overflow-hidden">
+                      <CardHeader className="bg-gradient-to-r from-blue-50 to-blue-100 border-b py-3">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="flex items-center text-base">
+                            <History className="h-5 w-5 mr-2 text-blue-600" />
+                            Ride History
+                          </CardTitle>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={() => setShowHistory(!showHistory)}
+                            className="text-blue-600 hover:text-blue-800 hover:bg-blue-100"
+                          >
+                            {showHistory ? 'Hide' : 'Show'}
+                          </Button>
+                        </div>
+                      </CardHeader>
                     
-                    {showHistory && (
-                      <div className="space-y-3 mt-2">
-                        {rideHistory.map((ride) => (
-                          <Card key={ride.id} className="p-3 shadow-sm">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <p className="font-medium">{new Date(ride.requestTime).toLocaleString()}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  <span className="font-medium">To:</span> {ride.destinationAddress}
-                                </p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <Badge variant="secondary">
-                                    {ride.status}
-                                  </Badge>
-                                  {ride.calculatedMileage && (
-                                    <span className="text-sm">
-                                      {ride.calculatedMileage.toFixed(2)} miles
-                                    </span>
+                      <CardContent className="p-0">
+                        {showHistory && (
+                          <div className="space-y-3 p-4">
+                            {rideHistory.map((ride) => (
+                              <Card key={ride.id} className="p-3 shadow-sm hover:shadow-md transition-shadow duration-200 border-0 bg-white">
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <p className="font-medium">{new Date(ride.requestTime).toLocaleString()}</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      <span className="font-medium">To:</span> {ride.destinationAddress}
+                                    </p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <Badge variant="secondary">
+                                        {ride.status}
+                                      </Badge>
+                                      {ride.calculatedMileage && (
+                                        <span className="text-sm">
+                                          {ride.calculatedMileage.toFixed(2)} miles
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {ride.status === 'completed' && ride.estimatedPrice && (
+                                    <div className="text-right">
+                                      <p className="font-bold">{formatPrice(ride.estimatedPrice)}</p>
+                                    </div>
                                   )}
                                 </div>
-                              </div>
-                              {ride.status === 'completed' && ride.estimatedPrice && (
-                                <div className="text-right">
-                                  <p className="font-bold">{formatPrice(ride.estimatedPrice)}</p>
-                                </div>
-                              )}
-                            </div>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
+                              </Card>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
                   </div>
                 )}
               </div>

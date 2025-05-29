@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, MapPin, Clock, Car, Phone, AlertCircle, History, CheckCircle, MapIcon } from "lucide-react";
+import { ArrowLeft, MapPin, Clock, Car, Phone, AlertCircle, History, CheckCircle, MapIcon, Loader2, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import DestinationSearch from "./DestinationSearch";
 import OpenStreetMapPicker from "./OpenStreetMapPicker";
@@ -68,24 +68,79 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
     }
   }, []);
 
+  // Get current location with fallback options
   useEffect(() => {
+    // First try to get a cached location from localStorage if available
+    const cachedLocation = localStorage.getItem('lastKnownLocation');
+    if (cachedLocation) {
+      try {
+        const location = JSON.parse(cachedLocation);
+        console.log("Using cached location:", location);
+        setCurrentLocation(location);
+      } catch (error) {
+        console.error("Error parsing cached location:", error);
+      }
+    }
+    
+    // Then try to get the current location
     if (navigator.geolocation) {
+      const geoOptions = {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 0
+      };
+      
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setCurrentLocation({
+          const newLocation = {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude
-          });
+          };
+          console.log("Got current location:", newLocation);
+          setCurrentLocation(newLocation);
+          
+          // Cache the location for future use
+          localStorage.setItem('lastKnownLocation', JSON.stringify(newLocation));
         },
         (error) => {
           console.error("Error getting location:", error);
-          toast({
-            title: "Location Error",
-            description: "Unable to get your current location. Please check your location settings.",
-            variant: "destructive",
-          });
-        }
+          
+          // If we don't have a cached location either, use a default location (Egypt)
+          if (!cachedLocation) {
+            const defaultLocation = {
+              latitude: 30.0444,
+              longitude: 31.2357
+            };
+            console.log("Using default location (Cairo, Egypt):", defaultLocation);
+            setCurrentLocation(defaultLocation);
+            toast({
+              title: "Location Notice",
+              description: "Using default location in Egypt. You can still request a ride.",
+              variant: "default",
+            });
+          } else {
+            toast({
+              title: "Location Note",
+              description: "Using your last known location. Location updates are not available.",
+              variant: "default",
+            });
+          }
+        },
+        geoOptions
       );
+    } else {
+      // Browser doesn't support geolocation
+      const defaultLocation = {
+        latitude: 30.0444,
+        longitude: 31.2357
+      };
+      console.log("Geolocation not supported, using default location:", defaultLocation);
+      setCurrentLocation(defaultLocation);
+      toast({
+        title: "Location Not Supported",
+        description: "Your browser doesn't support geolocation. Using default location in Egypt.",
+        variant: "default",
+      });
     }
   }, [toast]);
 
@@ -262,10 +317,25 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
   };
 
   const requestRide = async () => {
-    if (!currentLocation || !selectedDestination) {
+    console.log("Request ride initiated with destination:", selectedDestination);
+    console.log("Current location:", currentLocation);
+    
+    // More robust validation with detailed logging
+    if (!selectedDestination) {
+      console.error("Missing destination");
       toast({
-        title: "Missing Information", 
-        description: "Please select a destination.",
+        title: "Missing Information",
+        description: "Please select a destination",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    if (!currentLocation) {
+      console.error("Missing current location");
+      toast({
+        title: "Missing Information",
+        description: "Unable to determine your current location",
         variant: "destructive"
       });
       return;
@@ -274,9 +344,22 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
     try {
       setIsLoading(true);
       
-      // Get price from state
-      const price = parseFloat(manualPrice || '0');
+      // Check if there's already an active ride
+      const existingRide = await checkCustomerActiveRide(customerId);
+      if (existingRide && (existingRide.status === 'pending' || existingRide.status === 'accepted' || existingRide.status === 'started')) {
+        toast({
+          title: "Active Ride Found",
+          description: "You already have an active ride in progress.",
+          variant: "destructive"
+        });
+        setActiveRide(existingRide);
+        setCurrentRideId(existingRide.id || null);
+        setIsLoading(false);
+        return;
+      }
       
+      // Validate price
+      const price = parseFloat(manualPrice);
       if (isNaN(price) || price <= 0) {
         toast({
           title: "Invalid Price", 
@@ -287,12 +370,23 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
         return;
       }
       
+      // Get the pickup address using reverse geocoding
+      let pickupAddress = "Current Location";
+      try {
+        pickupAddress = await getAddressFromLocation(currentLocation);
+        console.log("Pickup address resolved:", pickupAddress);
+      } catch (error) {
+        console.error("Error getting pickup address:", error);
+        // Continue with the default address if reverse geocoding fails
+      }
+      
       // Create ride request
       const request: Omit<RideRequest, "id" | "requestTime" | "status" | "calculatedMileage"> = {
         customerId,
         customerName: customerName || "Customer",
         customerPhoneNumber: userPhoneNumber,
         pickupLocation: currentLocation,
+        pickupAddress: pickupAddress, // Include the resolved pickup address
         destinationLocation: selectedDestination.location,
         destinationAddress: selectedDestination.address,
         estimatedPrice: price,
@@ -319,11 +413,14 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
         title: "Ride Requested", 
         description: "Your ride request has been sent to nearby drivers."
       });
+      
+      // Reset UI states
+      setShowMapSelector(false);
     } catch (error) {
       console.error("Error requesting ride:", error);
       toast({
-        title: "Error", 
-        description: "Failed to request ride. Please try again.",
+        title: "Request Failed", 
+        description: "Could not create ride request. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -423,12 +520,40 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
   };
 
   return (
-    <div className="w-full max-w-md mx-auto p-4">
-      <div className="flex items-center gap-2 mb-4">
-        <Button variant="ghost" size="icon" onClick={onBack}>
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <h1 className="text-xl font-bold">Customer</h1>
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white relative">
+      {/* Enhanced Header with better navigation */}
+      <div className="bg-white p-4 shadow-md flex items-center justify-between sticky top-0 z-50 border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={onBack}
+            className="rounded-full hover:bg-blue-50 transition-colors"
+          >
+            <ArrowLeft className="h-5 w-5 text-blue-700" />
+          </Button>
+          <div className="flex flex-col">
+            <h1 className="text-lg font-bold text-blue-900">Customer Dashboard</h1>
+            <p className="text-xs text-gray-500">Book and manage your rides</p>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {activeRide && (
+            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-medium">
+              {getStatusText()}
+            </Badge>
+          )}
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setShowHistory(!showHistory)}
+            className="rounded-full flex items-center gap-1 text-xs border-blue-200 hover:bg-blue-50 hover:text-blue-700 transition-all"
+          >
+            <History className="h-3.5 w-3.5" />
+            {showHistory ? 'Current' : 'History'}
+          </Button>
+        </div>
       </div>
       
       <div className="space-y-4">
@@ -489,56 +614,62 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
             )}
             
             {selectedDestination && (
-              <div className="space-y-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Confirm your ride</CardTitle>
+              <div className="max-w-md mx-auto p-4 space-y-6">
+                <Card className="bg-white shadow-lg border-0 overflow-hidden rounded-xl">
+                  <CardHeader className="pb-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100">
+                    <CardTitle className="text-xl font-bold text-blue-800 flex items-center gap-2">
+                      <Car className="h-5 w-5 text-blue-600" />
+                      Request a Ride
+                    </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    {showMapSelector && (
-                      <div className="mb-4">
-                        <OpenStreetMapPicker
-                          initialLocation={selectedDestination.location}
-                          initialAddress={selectedDestination.address}
-                          onSelectLocation={(location, address) => {
-                            setSelectedDestination({ location, address });
-                            setShowMapSelector(false);
-                            setIsInitialSearch(false);
-                          }}
-                        />
-                      </div>
-                    )}
-                    
-                    {!showMapSelector && (
-                      <div className="space-y-4">
-                        <div className="flex items-start gap-3 justify-between">
-                          <div className="flex items-start gap-3">
-                            <div className="mt-0.5">
-                              <MapPin className="h-5 w-5 text-primary" />
-                            </div>
-                            <div>
-                              <h3 className="font-medium">Destination</h3>
-                              <p className="text-sm text-muted-foreground">{selectedDestination.address}</p>
-                            </div>
+                  <CardContent className="p-5">
+                    {!selectedDestination ? (
+                      <div className="space-y-5">
+                        <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                          <div className="bg-white p-2 rounded-full shadow-sm">
+                            <MapPin className="h-5 w-5 text-blue-600" />
                           </div>
-                          
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setShowMapSelector(true)}
-                            className="flex items-center gap-1 h-8"
-                          >
-                            <MapIcon className="h-3.5 w-3.5" />
-                            {isInitialSearch ? "Fine-tune" : "Edit"}
-                          </Button>
+                          <div>
+                            <span className="font-medium text-blue-900">Where would you like to go?</span>
+                            <p className="text-xs text-blue-700">Search for your destination below</p>
+                          </div>
                         </div>
                         
-                        <div className="border-t pt-4 mt-2">
-                          <div className="flex flex-col space-y-2">
-                            <label htmlFor="price" className="text-sm font-medium">
-                              Trip Price (EGP)
-                            </label>
-                            <input
+                        <DestinationSearch 
+                          onSelectDestination={(destination) => {
+                            setSelectedDestination(destination);
+                            setShowMapSelector(true);
+                          }}
+                          onInitialSearch={() => setIsInitialSearch(false)}
+                          isInitialSearch={isInitialSearch}
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-5">
+                        <div className="flex items-start gap-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                          <div className="bg-white p-2 rounded-full shadow-sm mt-1">
+                            <MapPin className="h-5 w-5 text-blue-600" />
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-medium text-blue-900">Destination</div>
+                            <div className="text-sm text-gray-700 mt-1 break-words">{selectedDestination.address}</div>
+                            <Button 
+                              variant="ghost" 
+                              className="px-0 h-8 mt-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-transparent"
+                              onClick={() => setSelectedDestination(null)}
+                            >
+                              <span className="underline">Change Destination</span>
+                            </Button>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-3">
+                          <label className="flex justify-between items-center" htmlFor="price">
+                            <span className="text-sm font-medium text-gray-700">Trip Price (EGP)</span>
+                            <span className="text-xs text-gray-500">Enter your price</span>
+                          </label>
+                          <div className="relative">
+                            <input 
                               id="price"
                               type="number"
                               min="1"
@@ -557,7 +688,23 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
                         </div>
                         
                         <div className="pt-4">
-                          <Button onClick={requestRide} className="w-full">
+                          <Button 
+                            onClick={() => {
+                              console.log("Request Ride button clicked");
+                              console.log("Selected destination:", selectedDestination);
+                              // Verify destination is properly set before proceeding
+                              if (!selectedDestination || !selectedDestination.location || !selectedDestination.address) {
+                                toast({
+                                  title: "Missing Destination",
+                                  description: "Please select a valid destination before requesting a ride.",
+                                  variant: "destructive"
+                                });
+                                return;
+                              }
+                              requestRide();
+                            }} 
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                          >
                             Request Ride
                           </Button>
                         </div>
@@ -583,34 +730,111 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
                     </div>
                     
                     {showHistory && (
-                      <div className="space-y-3 mt-2">
-                        {rideHistory.map((ride) => (
-                          <Card key={ride.id} className="p-3 shadow-sm">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <p className="font-medium">{new Date(ride.requestTime).toLocaleString()}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  <span className="font-medium">To:</span> {ride.destinationAddress}
-                                </p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <Badge variant={ride.status === 'completed' ? 'default' : 'secondary'}>
-                                    {ride.status}
-                                  </Badge>
-                                  {ride.calculatedMileage && (
-                                    <span className="text-sm">
-                                      {ride.calculatedMileage.toFixed(2)} miles
-                                    </span>
-                                  )}
-                                </div>
+                      <div className="max-w-md mx-auto p-4 space-y-5">
+                        <div className="flex items-center justify-between mb-2">
+                          <div>
+                            <h2 className="text-xl font-bold text-blue-900">Your Ride History</h2>
+                            <p className="text-sm text-gray-500">View your past trips</p>
+                          </div>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => setShowHistory(false)}
+                            className="rounded-full border-blue-200 text-blue-700 hover:bg-blue-50 flex items-center gap-1"
+                          >
+                            <ArrowLeft className="h-3.5 w-3.5" />
+                            Current
+                          </Button>
+                        </div>
+                        
+                        {rideHistory.length === 0 ? (
+                          <Card className="border-0 shadow-md rounded-xl overflow-hidden bg-gradient-to-r from-blue-50 to-indigo-50">
+                            <CardContent className="p-8 text-center flex flex-col items-center gap-4">
+                              <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center text-blue-500">
+                                <History className="h-8 w-8" />
                               </div>
-                              {ride.status === 'completed' && ride.estimatedPrice && (
-                                <div className="text-right">
-                                  <p className="font-bold">{formatPrice(ride.estimatedPrice)}</p>
-                                </div>
-                              )}
-                            </div>
+                              <div>
+                                <h3 className="text-lg font-medium text-blue-800">No Ride History</h3>
+                                <p className="text-gray-600 mt-1">Your completed trips will appear here</p>
+                              </div>
+                              <Button 
+                                className="mt-2 bg-blue-600 hover:bg-blue-700 rounded-full px-5 text-white"
+                                onClick={() => setShowHistory(false)}
+                              >
+                                Request a Ride
+                              </Button>
+                            </CardContent>
                           </Card>
-                        ))}
+                        ) : (
+                          <div className="space-y-4">
+                            {rideHistory.map((ride) => (
+                              <Card key={ride.id} className="border-0 shadow-md rounded-xl overflow-hidden transition-all hover:shadow-lg">
+                                <div className={`h-1.5 w-full ${ride.status === 'completed' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                <CardHeader className="pb-2 pt-4">
+                                  <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-2">
+                                      <Badge 
+                                        variant="outline"
+                                        className={`${ride.status === 'completed' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'} rounded-full px-3 py-1 text-xs font-medium`}
+                                      >
+                                        {ride.status.toUpperCase()}
+                                      </Badge>
+                                      <span className="text-sm text-gray-600">
+                                        {new Date(ride.requestTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                      </span>
+                                    </div>
+                                    <div className="text-lg font-bold text-blue-900">
+                                      {formatPrice(ride.estimatedPrice || 0)}
+                                    </div>
+                                  </div>
+                                </CardHeader>
+                                <CardContent className="py-3">
+                                  <div className="space-y-4">
+                                    <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                                      <div className="flex items-start gap-3">
+                                        <div className="mt-1">
+                                          <MapPin className="h-5 w-5 text-red-500" />
+                                        </div>
+                                        <div className="flex-1">
+                                          <div className="text-sm font-medium text-gray-900">Destination</div>
+                                          <div className="text-sm text-gray-700 mt-1 break-words">
+                                            {ride.destinationAddress}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex justify-between items-center">
+                                      <div className="flex items-center gap-2">
+                                        <div className="bg-blue-100 p-1.5 rounded-full">
+                                          <Clock className="h-4 w-4 text-blue-700" />
+                                        </div>
+                                        <div>
+                                          <div className="text-xs text-gray-500">TIME</div>
+                                          <div className="text-sm font-medium">
+                                            {new Date(ride.requestTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      
+                                      {ride.driverName && (
+                                        <div className="flex items-center gap-2">
+                                          <div className="bg-indigo-100 p-1.5 rounded-full">
+                                            <Car className="h-4 w-4 text-indigo-700" />
+                                          </div>
+                                          <div>
+                                            <div className="text-xs text-gray-500">DRIVER</div>
+                                            <div className="text-sm font-medium">{ride.driverName}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -621,83 +845,136 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
         )}
         
         {activeRide && activeRide.status !== 'completed' && (
-          <Card>
+          <Card className="shadow-lg bg-white border-0 rounded-xl overflow-hidden">
+            <div className={`h-2 w-full ${activeRide.status === 'pending' ? 'bg-amber-400' : activeRide.status === 'accepted' ? 'bg-blue-500' : activeRide.status === 'started' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>Ride Status</CardTitle>
                 <div className="flex gap-2">
-                  {activeRide.driverPhoneNumber && hasPhoneNumber && 
-                    (activeRide.status === 'accepted' || activeRide.status === 'started') && (
-                    <CallButton 
-                      phoneNumber={activeRide.driverPhoneNumber} 
-                      recipientName={activeRide.driverName || "Driver"}
-                      variant="button"
+                  {activeRide && activeRide.status === 'pending' && (
+                    <Button
+                      variant="destructive"
                       size="sm"
-                    />
-                  )}
-                  {(activeRide.status === 'pending' || activeRide.status === 'accepted') && (
-                    <Button 
-                      variant="destructive" 
-                      size="sm"
-                      disabled={cancellingRide}
                       onClick={handleCancelRide}
+                      disabled={cancellingRide}
+                      className="flex items-center gap-1"
                     >
-                      {cancellingRide ? "Cancelling..." : "Cancel Trip"}
+                      {cancellingRide ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Cancelling...
+                        </>
+                      ) : (
+                        <>
+                          <X className="h-3.5 w-3.5" />
+                          Cancel Ride
+                        </>
+                      )}
                     </Button>
                   )}
                 </div>
               </div>
+              
+              <div className="flex items-center gap-3 mb-2">
+                <div className={`p-2 rounded-full ${activeRide.status === 'pending' ? 'bg-amber-100 text-amber-600' : activeRide.status === 'accepted' ? 'bg-blue-100 text-blue-600' : activeRide.status === 'started' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-600'}`}>
+                  {activeRide.status === 'pending' ? (
+                    <Clock className="h-5 w-5" />
+                  ) : activeRide.status === 'accepted' ? (
+                    <Car className="h-5 w-5" />
+                  ) : activeRide.status === 'started' ? (
+                    <MapPin className="h-5 w-5" />
+                  ) : (
+                    <CheckCircle className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <CardTitle className="text-xl font-bold text-gray-800">{getStatusText()}</CardTitle>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {activeRide.status === 'pending' && 'Your ride request has been sent to nearby drivers'}
+                    {activeRide.status === 'accepted' && 'A driver has accepted and is on the way to pick you up'}
+                    {activeRide.status === 'started' && 'Your trip is in progress. Enjoy your ride!'}
+                    {activeRide.status === 'completed' && 'Your trip has been completed'}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between mt-2">
+                <Badge 
+                  variant="outline" 
+                  className={`text-xs font-medium px-3 py-1 rounded-full ${activeRide.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200' : activeRide.status === 'accepted' ? 'bg-blue-50 text-blue-700 border-blue-200' : activeRide.status === 'started' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-700 border-gray-200'}`}
+                >
+                  {activeRide.status.toUpperCase()}
+                </Badge>
+                <div className="text-xs text-gray-500">
+                  Requested at {new Date(activeRide.requestTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                </div>
+              </div>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <Badge variant={getStatusColor() as "default" | "secondary" | "destructive" | "outline"} className="mr-2">
-                    {activeRide.status}
-                  </Badge>
-                  <span className="text-sm font-medium">
-                    {activeRide.status === 'pending' && 'Waiting for a driver to accept your request'}
-                    {activeRide.status === 'accepted' && 'A driver has accepted your request and is on the way'}
-                    {activeRide.status === 'started' && 'Your trip is in progress'}
+            
+            <CardContent className="pb-5 pt-0">
+              <div className="space-y-5">
+                <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500 uppercase tracking-wider">From</p>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-green-500"></div>
+                        <p className="text-sm text-gray-800 font-medium truncate">Current Location</p>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500 uppercase tracking-wider">To</p>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-red-500"></div>
+                        <p className="text-sm text-gray-800 font-medium truncate">
+                          {activeRide.destinationAddress?.split(',')[0] || "Destination"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-gray-500">FULL DESTINATION</p>
+                      <p className="text-sm text-gray-800">{activeRide.destinationAddress}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-white p-1.5 rounded-full shadow-sm">
+                      <Car className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <span className="text-sm font-medium text-gray-700">Trip Price</span>
+                  </div>
+                  <span className="text-lg font-bold text-blue-800">
+                    {formatPrice(activeRide.estimatedPrice || 0)}
                   </span>
                 </div>
 
-                <div className="border-t pt-4 mt-2">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4 text-blue-500" />
-                      <span className="text-sm font-medium">Request Time</span>
-                    </div>
-                    <span className="text-sm">
-                      {new Date(activeRide.requestTime).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <MapPin className="h-4 w-4 text-blue-500" />
-                      <span className="text-sm font-medium">Destination</span>
-                    </div>
-                    <span className="text-sm text-right max-w-[60%]">
-                      {activeRide.destinationAddress}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Car className="h-4 w-4 text-blue-500" />
-                      <span className="text-sm font-medium">Trip Price</span>
-                    </div>
-                    <span className="text-sm font-bold">
-                      {formatPrice(activeRide.estimatedPrice || 0)}
-                    </span>
-                  </div>
-                </div>
-
                 {(activeRide.status === 'accepted' || activeRide.status === 'started') && activeRide.driverName && (
-                  <div className="mt-4 bg-blue-50 p-3 rounded-md">
-                    <p className="text-sm font-medium mb-2">Driver Information</p>
-                    <div className="flex justify-between items-center">
-                      <p className="font-medium">{activeRide.driverName || "Driver"}</p>
+                  <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-sm font-medium text-blue-800">Your Driver</p>
+                      <Badge variant="outline" className="bg-blue-100 text-blue-700 border-blue-200">
+                        {activeRide.status === 'accepted' ? 'On the way' : 'Driving'}
+                      </Badge>
+                    </div>
+                    
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold">
+                          {activeRide.driverName?.charAt(0) || "D"}
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-800">{activeRide.driverName || "Driver"}</p>
+                          {activeRide.driverPhoneNumber && (
+                            <p className="text-xs text-gray-500">{activeRide.driverPhoneNumber}</p>
+                          )}
+                        </div>
+                      </div>
                       
                       <div>
                         {activeRide.driverPhoneNumber && hasPhoneNumber ? (
@@ -706,16 +983,17 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
                             recipientName={activeRide.driverName || "Driver"}
                             variant="button"
                             size="sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white rounded-full px-4 py-2 text-sm shadow-sm"
                           />
                         ) : (
                           <Button 
                             variant="outline" 
                             size="sm" 
-                            className="flex items-center gap-1 text-xs"
+                            className="flex items-center gap-1 rounded-full border-blue-300 text-blue-700 hover:bg-blue-100"
                             onClick={() => setShowPhoneModal(true)}
                           >
-                            <Phone className="h-3 w-3" />
-                            Add Phone
+                            <Phone className="h-3.5 w-3.5" />
+                            Verify Phone
                           </Button>
                         )}
                       </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, ChangeEvent } from "react";
-import { User, getAuth } from "firebase/auth";
+import { User } from "firebase/auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Pencil, Loader2, Check, Phone } from "lucide-react";
@@ -12,9 +12,10 @@ import { Input } from "@/components/ui/input";
 
 interface UserProfileCardProps {
   user: User | null;
+  className?: string;
 }
 
-const UserProfileCard = ({ user }: UserProfileCardProps) => {
+const UserProfileCard = ({ user, className = '' }: UserProfileCardProps) => {
   const [isEditingImage, setIsEditingImage] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -210,7 +211,7 @@ const UserProfileCard = ({ user }: UserProfileCardProps) => {
     if (!phoneRegex.test(phoneNumber)) {
       toast({
         title: "Invalid Phone Number",
-        description: "Please enter a valid phone number (10-15 digits).",
+        description: "Please enter a valid phone number.",
         variant: "destructive"
       });
       return;
@@ -228,11 +229,11 @@ const UserProfileCard = ({ user }: UserProfileCardProps) => {
     }
     
     try {
-      // Save phone using both methods for redundancy
-      await savePhoneNumber(currentUser.uid, phoneNumber, 'customer');
+      // Save phone number to Firestore/localStorage
+      await savePhoneNumber(currentUser.uid, phoneNumber);
       
-      // Also update user data in Firebase profile
-      await updateUserData(currentUser.uid, { 
+      // Update user data
+      await updateUserData(currentUser.uid, {
         phoneNumber,
         phoneVerified: true
       });
@@ -258,28 +259,29 @@ const UserProfileCard = ({ user }: UserProfileCardProps) => {
       });
     }
   };
-  
+
   if (!user) return null;
-  
+
   return (
-    <Card className="bg-white shadow-sm border-0 overflow-hidden">
-      <CardContent className="p-0">
-        <div className="flex flex-col items-center p-6">
+    <Card className={className}>
+      <CardContent className="flex flex-col items-center py-4">
+        <div className="w-full flex flex-col items-center gap-2">
           {/* Profile Image */}
           <div className="relative mb-3">
             {isUploading ? (
-              <div className="h-24 w-24 rounded-full bg-gray-100 flex items-center justify-center">
-                <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+              <div className="flex flex-col items-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-2"></div>
+                <span className="text-sm text-gray-500">Uploading...</span>
               </div>
             ) : (
-              <div className="relative group">
+              <div className="relative">
                 <img 
-                  src={profileImage || "https://i.imgur.com/WxNkK7J.png"} 
+                  src={profileImage || '/placeholder-user.png'} 
                   alt="Profile" 
-                  className="h-24 w-24 rounded-full object-cover border-2 border-blue-100"
+                  className="h-20 w-20 rounded-full object-cover border-2 border-gray-200"
                 />
-                <button
-                  onClick={triggerFileInput}
+                <button 
+                  onClick={triggerFileInput} 
                   className="absolute bottom-0 right-0 bg-blue-500 hover:bg-blue-600 text-white p-1.5 rounded-full"
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -294,7 +296,7 @@ const UserProfileCard = ({ user }: UserProfileCardProps) => {
               </div>
             )}
           </div>
-          
+
           {/* User Name */}
           <div className="w-full flex items-center justify-center mb-2">
             {isEditingName ? (
@@ -327,12 +329,12 @@ const UserProfileCard = ({ user }: UserProfileCardProps) => {
               </div>
             )}
           </div>
-          
+
           {/* User Email */}
           {user.email && (
             <p className="text-sm text-gray-500">{user.email}</p>
           )}
-          
+
           {/* Phone Number Section */}
           <div className="w-full mt-3 border-t pt-3">
             {isLoadingPhone ? (
