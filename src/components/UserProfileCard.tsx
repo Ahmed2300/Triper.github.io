@@ -13,9 +13,10 @@ import { Input } from "@/components/ui/input";
 interface UserProfileCardProps {
   user: User | null;
   className?: string;
+  onSignOut?: () => void;
 }
 
-const UserProfileCard = ({ user, className = '' }: UserProfileCardProps) => {
+const UserProfileCard = ({ user, className = '', onSignOut }: UserProfileCardProps) => {
   const [isEditingImage, setIsEditingImage] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [isUploading, setIsUploading] = useState(false);

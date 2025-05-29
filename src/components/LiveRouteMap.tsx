@@ -218,31 +218,71 @@ const LiveRouteMap = ({ ride, driverLocation, className = '' }: LiveRouteMapProp
   }, [driverLocation]);
 
   return (
-    <div className={`relative rounded-lg overflow-hidden ${className}`}>
+    <div className={`relative rounded-lg overflow-hidden shadow-md ${className}`}>
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-75 z-10">
-          <span className="text-blue-600">Loading map...</span>
+          <div className="flex flex-col items-center">
+            <span className="animate-spin h-8 w-8 mb-2 rounded-full border-4 border-blue-500 border-t-transparent"></span>
+            <span className="text-blue-600 text-sm font-medium">Loading map...</span>
+          </div>
         </div>
       )}
       
       {mapError && (
         <div className="absolute inset-0 flex items-center justify-center bg-red-50 z-10">
-          <span className="text-red-600">{mapError}</span>
+          <span className="text-red-600 text-sm p-3 text-center">{mapError}</span>
         </div>
       )}
       
-      <div ref={mapRef} className="h-64 w-full"></div>
+      {/* Map container with responsive height */}
+      <div 
+        ref={mapRef} 
+        className="w-full h-48 sm:h-64 md:h-80 mobile-map-container transition-all duration-300"
+      ></div>
       
       {estimatedTime !== null && estimatedDistance !== null && (
-        <div className="absolute bottom-0 left-0 right-0 bg-white bg-opacity-90 p-2 text-xs flex justify-between">
-          <div>
-            <span className="font-medium">Distance:</span> {estimatedDistance} miles
+        <div className="absolute bottom-0 left-0 right-0 bg-white bg-opacity-95 backdrop-blur-sm px-3 py-2.5 text-xs sm:text-sm flex justify-between items-center shadow-inner">
+          <div className="flex items-center">
+            <span className="text-blue-500 mr-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+              </svg>
+            </span>
+            <span className="font-medium">Distance:</span> 
+            <span className="ml-1">{estimatedDistance} miles</span>
           </div>
-          <div>
-            <span className="font-medium">ETA:</span> {estimatedTime} min
+          <div className="flex items-center">
+            <span className="text-blue-500 mr-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+              </svg>
+            </span>
+            <span className="font-medium">ETA:</span> 
+            <span className="ml-1">{estimatedTime} min</span>
           </div>
         </div>
       )}
+      
+      {/* Mobile control overlay */}
+      <div className="absolute top-2 right-2 z-20">
+        <button 
+          onClick={() => {
+            if (leafletMap.current) {
+              // Re-center map on driver's location
+              leafletMap.current.setView(
+                [driverLocation.latitude, driverLocation.longitude],
+                leafletMap.current.getZoom()
+              );
+            }
+          }}
+          className="bg-white rounded-full p-2 shadow-md hover:bg-blue-50 transition-colors"
+          aria-label="Center on driver"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-700" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 };

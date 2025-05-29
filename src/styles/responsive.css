@@ -1,0 +1,75 @@
+/* Mobile responsive styles */
+
+/* Base responsive adjustments */
+@media (max-width: 640px) {
+  .mobile-stack {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+  
+  .mobile-full-width {
+    width: 100% !important;
+  }
+  
+  .mobile-hidden {
+    display: none !important;
+  }
+  
+  .mobile-small-text {
+    font-size: 0.875rem !important;
+  }
+  
+  .mobile-spacing {
+    padding: 0.75rem !important;
+  }
+  
+  .mobile-compact-btn {
+    padding: 0.5rem 0.75rem !important;
+  }
+  
+  .mobile-icon-only .btn-text {
+    display: none !important;
+  }
+  
+  .mobile-nav-compact {
+    padding: 0.5rem !important;
+    gap: 0.5rem !important;
+  }
+  
+  .mobile-justify-between {
+    justify-content: space-between !important;
+  }
+  
+  .mobile-gap-1 {
+    gap: 0.25rem !important;
+  }
+  
+  .mobile-flex-wrap {
+    flex-wrap: wrap !important;
+  }
+  
+  /* Map element adjustments */
+  .mobile-map-container {
+    height: 200px !important;
+  }
+  
+  /* Card adjustments for small screens */
+  .mobile-card-padding {
+    padding: 0.75rem !important;
+  }
+  
+  .mobile-card-spacing > * {
+    margin-bottom: 0.5rem !important;
+  }
+}
+
+/* Tablet adjustments */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .tablet-adjusted-spacing {
+    padding: 1rem !important;
+  }
+  
+  .tablet-map-container {
+    height: 300px !important;
+  }
+}
