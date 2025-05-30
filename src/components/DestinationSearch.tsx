@@ -2,12 +2,30 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { SearchIcon, Loader2, MapPin, History, X } from "lucide-react";
+import { SearchIcon, Loader2, MapPin, History, X, Map as MapIcon } from "lucide-react";
 import { PlaceResult } from "@/services/locationService";
 import { searchPlacesEnhanced } from "@/services/enhancedLocationService";
 import { Location } from "@/services/firebaseService";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import OpenStreetMapPicker from "./OpenStreetMapPicker";
+
+// Custom debounce hook for search as you type
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
 
 interface DestinationSearchProps {
   currentLocation: Location | null;
@@ -30,8 +48,14 @@ const DestinationSearch = ({
   const [showResults, setShowResults] = useState(false);
   const [recentSearches, setRecentSearches] = useState<PlaceResult[]>([]);
   const [showRecent, setShowRecent] = useState(false);
+  const [autoSearchEnabled, setAutoSearchEnabled] = useState(true); // Flag to control auto-search
+  const [showMapSelector, setShowMapSelector] = useState(false); // Show/hide map selector
+  const [selectedPlace, setSelectedPlace] = useState<PlaceResult | null>(null); // Currently selected place for map adjustment
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  // Debounce the search query to avoid making too many API calls
+  const debouncedSearchQuery = useDebounce(searchQuery, 500); // 500ms delay
   
   // Initialize with existing location if provided
   useEffect(() => {
@@ -121,10 +145,16 @@ const DestinationSearch = ({
   useEffect(() => {
     if (searchQuery.trim() === '') {
       setSearchResults([]);
+      setShowResults(false);
     }
   }, [searchQuery]);
   
-  // Don't auto-search when query changes - only search on button click or Enter key press
+  // Auto-search when debounced query changes and has at least 2 characters
+  useEffect(() => {
+    if (autoSearchEnabled && debouncedSearchQuery.trim().length >= 2) {
+      handleSearch();
+    }
+  }, [debouncedSearchQuery, autoSearchEnabled]);
 
   // Handle click outside to close results
   useEffect(() => {
@@ -142,16 +172,31 @@ const DestinationSearch = ({
 
   // Handle selection of a place
   const handleSelectPlace = (place: PlaceResult) => {
-    onSelectDestination({
-      location: place.location,
-      address: place.address,
-    });
+    // Store the selected place for potential map adjustment
+    setSelectedPlace(place);
     setSearchQuery(place.address);
     setShowResults(false);
     setShowRecent(false);
     
     // Save to recent searches
     saveRecentSearch(place);
+    
+    // Either show map selector or directly select the destination
+    if (place.accuracy === 'exact') {
+      // If location is already precise, no need for map adjustment
+      finalizeDestinationSelection(place.location, place.address);
+    } else {
+      // Show map selector for fine-tuning
+      setShowMapSelector(true);
+    }
+  };
+  
+  // Finalize destination selection (either direct or after map adjustment)
+  const finalizeDestinationSelection = (location: Location, address: string) => {
+    onSelectDestination({
+      location: location,
+      address: address,
+    });
   };
   
   // Clear search query
@@ -215,11 +260,17 @@ const DestinationSearch = ({
               setSearchQuery(e.target.value);
               if (e.target.value.trim() === '') {
                 setShowResults(false);
+              } else if (e.target.value.trim().length >= 2) {
+                // Show loading state immediately
+                setIsSearching(true);
+                setShowResults(true);
+                setShowRecent(false);
               }
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && searchQuery.trim().length >= 2) {
                 e.preventDefault();
+                // Force immediate search on Enter key
                 handleSearch();
               }
             }}
@@ -255,17 +306,34 @@ const DestinationSearch = ({
           </Button>
         )}
         <Button 
-          variant="secondary"
-          disabled={isSearching || !searchQuery.trim().length || searchQuery.trim().length < 2}
-          onClick={handleSearch}
-          className="bg-primary text-primary-foreground hover:bg-primary/90"
+          variant={autoSearchEnabled ? "secondary" : "outline"}
+          size="icon"
+          onClick={() => setAutoSearchEnabled(!autoSearchEnabled)}
+          title={autoSearchEnabled ? "Auto-search enabled (click to disable)" : "Auto-search disabled (click to enable)"}
+          className={autoSearchEnabled ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}
         >
-          {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <>
-            <SearchIcon className="h-4 w-4 mr-1" />
-            Search
-          </>}
+          {isSearching ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <SearchIcon className="h-4 w-4" />
+          )}
         </Button>
       </div>
+      
+      {/* Map button - only shown when a location is selected but map selector is not yet open */}
+      {selectedPlace && !showMapSelector && (
+        <div className="mt-2">
+          <Button 
+            variant="outline" 
+            size="sm"
+            className="w-full flex items-center justify-center gap-2 text-sm"
+            onClick={() => setShowMapSelector(true)}
+          >
+            <MapIcon className="h-4 w-4" />
+            Adjust Location on Map
+          </Button>
+        </div>
+      )}
       
       {/* Search suggestion tags */}
       {!showResults && !showRecent && !searchQuery && (
@@ -349,6 +417,23 @@ const DestinationSearch = ({
             Try different keywords or check your spelling
           </p>
         </Card>
+      )}
+      
+      {/* Map selector modal */}
+      {showMapSelector && selectedPlace && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md">
+            <OpenStreetMapPicker
+              initialLocation={selectedPlace.location}
+              initialAddress={selectedPlace.address}
+              onSelectLocation={(location, address) => {
+                finalizeDestinationSelection(location, address);
+                setShowMapSelector(false);
+              }}
+              onClose={() => setShowMapSelector(false)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

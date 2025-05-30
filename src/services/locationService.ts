@@ -12,6 +12,7 @@ export interface PlaceResult {
   address: string;
   location: Location;
   distance?: number;
+  accuracy?: 'approximate' | 'exact'; // Indicates if the location is exact or needs refinement
 }
 
 /**

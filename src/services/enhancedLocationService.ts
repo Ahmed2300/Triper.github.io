@@ -11,6 +11,7 @@ export interface PlaceResult {
   address: string;
   location: Location;
   distance?: number;
+  accuracy?: 'approximate' | 'exact'; // Indicates if the location is exact or needs refinement
   osm_type?: 'node' | 'way' | 'relation' | string; // string for flexibility if OSM adds new types
   osm_id?: string;
   place_rank?: number;
@@ -308,6 +309,17 @@ export async function searchPlacesEnhanced(
     for (const result of results) {
       const locationKey = `${result.location.latitude.toFixed(4)}-${result.location.longitude.toFixed(4)}`;
       if (!seenLocations.has(locationKey)) {
+        // Add accuracy property based on the result type
+        // - 'node' type with high place_rank (>20) is usually precise
+        // - Local landmarks with high importance are also precise
+        if (result.osm_type === 'node' && (result.place_rank || 0) > 20) {
+          result.accuracy = 'exact';
+        } else if (result.importance_score && result.importance_score > 0.8) {
+          result.accuracy = 'exact';
+        } else {
+          result.accuracy = 'approximate';
+        }
+        
         combinedResults.push(result);
         seenLocations.add(locationKey);
       }
@@ -317,6 +329,8 @@ export async function searchPlacesEnhanced(
     for (const result of localResults) {
       const locationKey = `${result.location.latitude.toFixed(4)}-${result.location.longitude.toFixed(4)}`;
       if (!seenLocations.has(locationKey) && combinedResults.length < limit) {
+        // Mark local results as approximate by default since they're less precise
+        result.accuracy = 'approximate';
         combinedResults.push(result);
         seenLocations.add(locationKey);
       }
