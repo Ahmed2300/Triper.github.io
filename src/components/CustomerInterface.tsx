@@ -444,7 +444,7 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
     console.log('Ride reset complete');
   };
   
-  // Cancel a pending or accepted ride
+  // Cancel a pending, accepted, or started ride
   const handleCancelRide = async () => {
     if (!activeRide || !activeRide.id) {
       toast({
@@ -455,25 +455,55 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
       return;
     }
     
+    // Only allow cancelling rides that are in pending, accepted, or started status
+    if (!['pending', 'accepted', 'started'].includes(activeRide.status)) {
+      toast({
+        title: "Cannot Cancel", 
+        description: "This ride cannot be cancelled in its current state.",
+        variant: "destructive"
+      });
+      return;
+    }
+    
     try {
       setCancellingRide(true);
-      await cancelRide(activeRide.id);
+      
+      if (activeRide.status === 'pending') {
+        // For pending rides, use the standard cancelRide function
+        await cancelRide(activeRide.id);
+      } else {
+        // For accepted or started rides, we need to revert to pending status
+        const updatedRide: Partial<RideRequest> = {
+          status: 'pending',
+          driverId: null as unknown as undefined,
+          driverName: undefined,
+          driverPhoneNumber: undefined
+        };
+        
+        await updateRideRequest(activeRide.id, updatedRide);
+      }
       
       toast({
         title: "Ride Cancelled", 
-        description: "Your ride has been cancelled successfully."
+        description: activeRide.status === 'pending' 
+          ? "Your ride has been cancelled successfully." 
+          : "Your ride has been returned to the pending list."
       });
       
-      // Reset states
-      setActiveRide(null);
-      setCurrentRideId(null);
-      // Optionally reset destination too
-      setSelectedDestination(null);
+      // Reset states if it was a pending cancellation, otherwise refresh the active ride
+      if (activeRide.status === 'pending') {
+        setActiveRide(null);
+        setCurrentRideId(null);
+        setSelectedDestination(null);
+      } else {
+        // The ride will be updated by the active listener automatically
+        // We don't need to do anything special here as the Firebase listener will update the UI
+      }
     } catch (error) {
       console.error("Error cancelling ride:", error);
       toast({
-        title: "Error", 
-        description: "Failed to cancel ride. Please try again.",
+        title: "Cancel Failed", 
+        description: "Could not cancel the ride. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -851,7 +881,7 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
               <div className="flex items-center justify-between">
                 <CardTitle>Ride Status</CardTitle>
                 <div className="flex gap-2">
-                  {activeRide && activeRide.status === 'pending' && (
+                  {activeRide && (activeRide.status === 'pending' || activeRide.status === 'accepted' || activeRide.status === 'started') && (
                     <Button
                       variant="destructive"
                       size="sm"

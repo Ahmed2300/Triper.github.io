@@ -478,9 +478,66 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
   // Reset active ride state
   const resetRide = () => {
     setActiveRide(null);
+    setMileage(0);
     setStartLocation(null);
     setIsTracking(false);
-    setMileage(0);
+  };
+  
+  // Cancel an accepted ride and return it to pending status
+  const cancelAcceptedRide = async () => {
+    if (!activeRide || !activeRide.id) {
+      toast({
+        title: "No Active Ride",
+        description: "There is no active ride to cancel.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Allow cancellation even if status is not exactly 'accepted'
+    // This ensures drivers can cancel even if there's a state mismatch
+    if (activeRide.status !== 'accepted' && activeRide.status !== 'started') {
+      toast({
+        title: "Cannot Cancel",
+        description: "You can only cancel rides that are in 'accepted' or 'started' status.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    try {
+      // Use a loading state while updating
+      setIsLoading(true);
+      
+      // Update the ride to remove driver information and set status back to pending
+      const updatedRide: Partial<RideRequest> = {
+        status: 'pending',
+        driverId: null as unknown as undefined,
+        driverName: undefined,
+        driverPhoneNumber: undefined
+      };
+      
+      // Call Firebase service directly with explicit error handling
+      await updateRideRequest(activeRide.id, updatedRide);
+      
+      // Success message
+      toast({
+        title: "Ride Cancelled",
+        description: "The ride has been returned to the pending rides list.",
+      });
+      
+      // Reset ride state for the driver
+      resetRide();
+    } catch (error) {
+      console.error("Error cancelling ride:", error);
+      toast({
+        title: "Cancel Failed",
+        description: "Could not cancel the ride. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -665,14 +722,36 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
                     <div className="flex justify-end space-x-2 mt-2">
                       {activeRide.status === 'accepted' && (
                         <div className="flex flex-col w-full">
-                           <Button 
-                            onClick={startRide}
-                            variant="default"
-                            className="bg-green-600 hover:bg-green-700 text-white font-medium"
-                          >
-                            <Play className="mr-2 h-4 w-4" />
-                            Start Trip
-                          </Button>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+                            <Button 
+                              onClick={startRide}
+                              variant="default"
+                              className="bg-green-600 hover:bg-green-700 text-white font-medium flex-1"
+                            >
+                              <Play className="mr-2 h-4 w-4" />
+                              Start Trip
+                            </Button>
+                            <Button 
+                              onClick={cancelAcceptedRide}
+                              variant="outline"
+                              className="border-red-300 text-red-600 hover:bg-red-50 flex-1"
+                              disabled={isLoading}
+                            >
+                              {isLoading ? (
+                                <>
+                                  <svg className="mr-2 h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                                  </svg>
+                                  Cancelling...
+                                </>
+                              ) : (
+                                <>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2 h-4 w-4"><circle cx="12" cy="12" r="10"></circle><path d="m15 9-6 6"></path><path d="m9 9 6 6"></path></svg>
+                                  Cancel Ride
+                                </>
+                              )}
+                            </Button>
+                          </div>
                           {currentLocation && activeRide.pickupLocation && (
                             <p className="text-xs text-gray-500 mt-1 text-center">
                               You must be at the pickup location to start the trip. 
