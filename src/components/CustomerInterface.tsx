@@ -1,21 +1,31 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, MapPin, Clock, Car, Phone, AlertCircle, History, CheckCircle, MapIcon, Loader2, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { MapPin, Plus, Minus, Check, History, Car, Clock, CheckCircle, X, Loader2 } from "lucide-react";
-import { getLocationName, getLocation } from "@/utils/locationUtils";
-import { Separator } from "@/components/ui/separator";
-import { Input } from "@/components/ui/input";
-import { createRideRequest, listenToCustomerActiveRide, RideRequest, Location, checkCustomerActiveRide, cancelRide, updateRideRequest, getRideHistory } from "@/services/firebaseService";
+import DestinationSearch from "./DestinationSearch";
+import OpenStreetMapPicker from "./OpenStreetMapPicker";
+import { 
+  listenToCustomerActiveRide, 
+  listenToAllCustomerRides, 
+  createRideRequest, 
+  cancelRide, 
+  updateRideRequest, 
+  checkCustomerActiveRide,
+  getCustomerRideHistory,
+  RideRequest, 
+  Location 
+} from "@/services/firebaseService";
 import { calculateEstimatedPrice, formatPrice } from "@/utils/priceCalculator";
+import PhoneVerificationModal from "./PhoneVerificationModal";
+import CallButton from "./CallButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import LiveRouteMap from "./LiveRouteMap";
-import { getCurrentUser } from "@/services/authService";
-import { database } from "@/lib/firebase";
-import { ref, get, update } from "firebase/database";
+import { Separator } from "@/components/ui/separator";
 import { getAddressFromLocation } from "@/services/locationService";
-import { setUserPhoneNumber, updateUserData } from "@/services/authService";
+import { database } from "@/lib/firebase";
+import { ref, update } from "firebase/database";
+import { setUserPhoneNumber, getCurrentUser, updateUserData } from "@/services/authService";
 import { getPhoneNumber, hasStoredPhoneNumber, savePhoneNumber } from "@/services/phoneStorage";
 
 interface CustomerInterfaceProps {
@@ -436,7 +446,7 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
     console.log('Ride reset complete');
   };
   
-  // Cancel a pending, accepted, or started ride
+  // Cancel a pending or accepted ride
   const handleCancelRide = async () => {
     if (!activeRide || !activeRide.id) {
       toast({
@@ -447,8 +457,8 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
       return;
     }
     
-    // Only allow cancelling rides that are in pending, accepted, or started status
-    if (!['pending', 'accepted', 'started'].includes(activeRide.status)) {
+    // Only allow cancelling rides that are in pending or accepted status
+    if (!['pending', 'accepted'].includes(activeRide.status)) {
       toast({
         title: "Cannot Cancel", 
         description: "This ride cannot be cancelled in its current state.",
@@ -463,15 +473,20 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
       if (activeRide.status === 'pending') {
         // For pending rides, use the standard cancelRide function
         await cancelRide(activeRide.id);
-      } else {
-        // For accepted or started rides, get a direct reference to the ride in Firebase
-        const rideRef = ref(database, `rideRequests/${activeRide.id}`);
         
-        // Get the current ride data to ensure it exists
-        const snapshot = await get(rideRef);
-        if (!snapshot.exists()) {
-          throw new Error('Ride not found');
-        }
+        toast({
+          title: "Ride Cancelled", 
+          description: "Your ride has been cancelled successfully."
+        });
+        
+        // Reset states
+        setActiveRide(null);
+        setCurrentRideId(null);
+        // Optionally reset destination too
+        setSelectedDestination(null);
+      } else if (activeRide.status === 'accepted') {
+        // For accepted rides, update the database directly
+        const rideRef = ref(database, `rideRequests/${activeRide.id}`);
         
         // Create an update object that explicitly removes driver fields
         const updates = {
@@ -483,23 +498,13 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
         
         // Update the ride directly in Firebase
         await update(rideRef, updates);
-      }
-      
-      toast({
-        title: "Ride Cancelled", 
-        description: activeRide.status === 'pending' 
-          ? "Your ride has been cancelled successfully." 
-          : "Your ride has been returned to the pending list."
-      });
-      
-      // Reset states if it was a pending cancellation, otherwise refresh the active ride
-      if (activeRide.status === 'pending') {
-        setActiveRide(null);
-        setCurrentRideId(null);
-        setSelectedDestination(null);
-      } else {
+        
+        toast({
+          title: "Ride Cancelled", 
+          description: "Your driver has been notified. The ride has been returned to pending status."
+        });
+        
         // The ride will be updated by the active listener automatically
-        // We don't need to do anything special here as the Firebase listener will update the UI
       }
     } catch (error) {
       console.error("Error cancelling ride:", error);
@@ -883,25 +888,16 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
               <div className="flex items-center justify-between">
                 <CardTitle>Ride Status</CardTitle>
                 <div className="flex gap-2">
-                  {activeRide && (activeRide.status === 'pending' || activeRide.status === 'accepted' || activeRide.status === 'started') && (
+                  {activeRide && (activeRide.status === 'pending' || activeRide.status === 'accepted') && (
                     <Button
                       variant="destructive"
                       size="sm"
                       onClick={handleCancelRide}
                       disabled={cancellingRide}
-                      className="flex items-center gap-1"
+                      className="flex items-center gap-1 rounded-full"
                     >
-                      {cancellingRide ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Cancelling...
-                        </>
-                      ) : (
-                        <>
-                          <X className="h-3.5 w-3.5" />
-                          Cancel Ride
-                        </>
-                      )}
+                      {cancellingRide ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                      Cancel
                     </Button>
                   )}
                 </div>
