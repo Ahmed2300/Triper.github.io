@@ -1,29 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, MapPin, Clock, Car, Phone, AlertCircle, History, CheckCircle, MapIcon, Loader2, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import DestinationSearch from "./DestinationSearch";
-import OpenStreetMapPicker from "./OpenStreetMapPicker";
-import { 
-  listenToCustomerActiveRide, 
-  listenToAllCustomerRides, 
-  createRideRequest, 
-  cancelRide, 
-  updateRideRequest, 
-  checkCustomerActiveRide,
-  getCustomerRideHistory,
-  RideRequest, 
-  Location 
-} from "@/services/firebaseService";
-import { calculateEstimatedPrice, formatPrice } from "@/utils/priceCalculator";
-import PhoneVerificationModal from "./PhoneVerificationModal";
-import CallButton from "./CallButton";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { MapPin, Plus, Minus, Check, History, Car, Clock, CheckCircle, X, Loader2 } from "lucide-react";
+import { getLocationName, getLocation } from "@/utils/locationUtils";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { createRideRequest, listenToCustomerActiveRide, RideRequest, Location, checkCustomerActiveRide, cancelRide, updateRideRequest, getRideHistory } from "@/services/firebaseService";
+import { calculateEstimatedPrice, formatPrice } from "@/utils/priceCalculator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import LiveRouteMap from "./LiveRouteMap";
+import { getCurrentUser } from "@/services/authService";
+import { database } from "@/lib/firebase";
+import { ref, get, update } from "firebase/database";
 import { getAddressFromLocation } from "@/services/locationService";
-import { setUserPhoneNumber, getCurrentUser, updateUserData } from "@/services/authService";
+import { setUserPhoneNumber, updateUserData } from "@/services/authService";
 import { getPhoneNumber, hasStoredPhoneNumber, savePhoneNumber } from "@/services/phoneStorage";
 
 interface CustomerInterfaceProps {
@@ -472,15 +464,25 @@ const CustomerInterface = ({ onBack }: CustomerInterfaceProps) => {
         // For pending rides, use the standard cancelRide function
         await cancelRide(activeRide.id);
       } else {
-        // For accepted or started rides, we need to revert to pending status
-        const updatedRide: Partial<RideRequest> = {
+        // For accepted or started rides, get a direct reference to the ride in Firebase
+        const rideRef = ref(database, `rideRequests/${activeRide.id}`);
+        
+        // Get the current ride data to ensure it exists
+        const snapshot = await get(rideRef);
+        if (!snapshot.exists()) {
+          throw new Error('Ride not found');
+        }
+        
+        // Create an update object that explicitly removes driver fields
+        const updates = {
           status: 'pending',
-          driverId: null as unknown as undefined,
-          driverName: undefined,
-          driverPhoneNumber: undefined
+          driverId: null,
+          driverName: null,
+          driverPhoneNumber: null
         };
         
-        await updateRideRequest(activeRide.id, updatedRide);
+        // Update the ride directly in Firebase
+        await update(rideRef, updates);
       }
       
       toast({

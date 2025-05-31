@@ -14,6 +14,8 @@ import {
   checkDriverActiveRide,
   getDriverRideHistory
 } from "@/services/firebaseService";
+import { database } from "@/lib/firebase";
+import { ref, get, update } from "firebase/database";
 import { calculateEstimatedPrice, formatPrice } from "@/utils/priceCalculator";
 import PhoneVerificationModal from "./PhoneVerificationModal";
 import CallButton from "./CallButton";
@@ -509,16 +511,25 @@ const DriverInterface = ({ onBack }: DriverInterfaceProps) => {
       // Use a loading state while updating
       setIsLoading(true);
       
-      // Update the ride to remove driver information and set status back to pending
-      const updatedRide: Partial<RideRequest> = {
+      // Get a direct reference to the ride in Firebase
+      const rideRef = ref(database, `rideRequests/${activeRide.id}`);
+      
+      // Get the current ride data
+      const snapshot = await get(rideRef);
+      if (!snapshot.exists()) {
+        throw new Error('Ride not found');
+      }
+      
+      // Create an update object that explicitly removes driver fields
+      const updates = {
         status: 'pending',
-        driverId: null as unknown as undefined,
-        driverName: undefined,
-        driverPhoneNumber: undefined
+        driverId: null,
+        driverName: null,
+        driverPhoneNumber: null
       };
       
-      // Call Firebase service directly with explicit error handling
-      await updateRideRequest(activeRide.id, updatedRide);
+      // Update the ride directly in Firebase
+      await update(rideRef, updates);
       
       // Success message
       toast({
